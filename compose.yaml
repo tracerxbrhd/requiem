@@ -1,0 +1,83 @@
+name: requiem
+
+services:
+  postgres:
+    image: postgres:18.6-bookworm
+    environment:
+      POSTGRES_DB: requiem
+      POSTGRES_USER: requiem
+      POSTGRES_PASSWORD: requiem
+    ports:
+      - "127.0.0.1:${REQUIEM_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U requiem -d requiem"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  migrate:
+    image: requiem:local
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      REQUIEM_DATABASE_URL: postgresql+psycopg://requiem:requiem@postgres:5432/requiem
+      REQUIEM_ENVIRONMENT: ${REQUIEM_ENVIRONMENT:-development}
+      REQUIEM_LOG_LEVEL: ${REQUIEM_LOG_LEVEL:-INFO}
+      REQUIEM_LOG_FORMAT: ${REQUIEM_LOG_FORMAT:-json}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: requiem:local
+    build: .
+    command: ["requiem-api"]
+    environment:
+      REQUIEM_DATABASE_URL: postgresql+psycopg://requiem:requiem@postgres:5432/requiem
+      REQUIEM_API_HOST: 0.0.0.0
+      REQUIEM_API_PORT: 8000
+      REQUIEM_ENVIRONMENT: ${REQUIEM_ENVIRONMENT:-development}
+      REQUIEM_LOG_LEVEL: ${REQUIEM_LOG_LEVEL:-INFO}
+      REQUIEM_LOG_FORMAT: ${REQUIEM_LOG_FORMAT:-json}
+    ports:
+      - "127.0.0.1:${REQUIEM_API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4).close()"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  bot:
+    image: requiem:local
+    build: .
+    command: ["requiem-bot"]
+    environment:
+      REQUIEM_DATABASE_URL: postgresql+psycopg://requiem:requiem@postgres:5432/requiem
+      REQUIEM_DISCORD_TOKEN: ${REQUIEM_DISCORD_TOKEN:-}
+      REQUIEM_DISCORD_APPLICATION_ID: ${REQUIEM_DISCORD_APPLICATION_ID:-}
+      REQUIEM_DISCORD_CLIENT_ID: ${REQUIEM_DISCORD_CLIENT_ID:-}
+      REQUIEM_ENVIRONMENT: ${REQUIEM_ENVIRONMENT:-development}
+      REQUIEM_LOG_LEVEL: ${REQUIEM_LOG_LEVEL:-INFO}
+      REQUIEM_LOG_FORMAT: ${REQUIEM_LOG_FORMAT:-json}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:

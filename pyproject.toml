@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "requiem"
+version = "0.1.0"
+description = "Discord server management and automation platform"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "alembic>=1.16,<2",
+    "fastapi>=0.115,<1",
+    "hikari>=2.6,<2.7",
+    "hikari-arc>=2.3,<2.4",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic-settings>=2.9,<3",
+    "sqlalchemy[asyncio]>=2.0.40,<2.1",
+    "uvicorn>=0.34,<1",
+]
+
+[project.scripts]
+requiem-bot = "requiem.transports.discord.bot:main"
+requiem-api = "requiem.transports.api.app:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28,<1",
+    "mypy>=1.15,<2",
+    "pytest>=8.3,<10",
+    "pytest-asyncio>=1.4,<2",
+    "ruff>=0.11,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/requiem"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+extend-exclude = [".cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["arc.inject"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests", "migrations"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["integration: requires a disposable PostgreSQL database via TEST_DATABASE_URL"]
+addopts = "-ra --strict-markers"

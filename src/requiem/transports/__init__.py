@@ -1,0 +1,1 @@
+"""Discord and HTTP adapters."""
