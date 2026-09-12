@@ -13,4 +13,7 @@ and PostgreSQL-backed temporary-ban expiry that recovers after bot restart.
 - [Moderation commands and lifecycle](docs/moderation.md)
 - [Foundation verification report](docs/foundation-verification.md)
 
-The project is proprietary. No open-source license is granted.
+The project is proprietary, source-available software and is not open source. Public access to
+the repository does not grant permission to deploy, modify, redistribute, or self-host Requiem
+outside the rights expressly stated in the [LICENSE](LICENSE) or otherwise required by applicable
+law or GitHub's Terms of Service.
