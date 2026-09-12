@@ -2,6 +2,8 @@ import asyncio
 import logging
 from datetime import timedelta
 
+from requiem.modules.moderation.audit.delivery import AuditSink, publish
+from requiem.modules.moderation.audit.domain import AuditEvent, Kind
 from requiem.modules.moderation.domain import Failure, ModerationError, now_utc
 from requiem.modules.moderation.ports import BanStore, DiscordModeration
 
@@ -9,9 +11,12 @@ logger = logging.getLogger(__name__)
 
 
 class BanExpiryWorker:
-    def __init__(self, discord: DiscordModeration, bans: BanStore) -> None:
+    def __init__(
+        self, discord: DiscordModeration, bans: BanStore, audit: AuditSink | None = None
+    ) -> None:
         self.discord = discord
         self.bans = bans
+        self.audit = audit
 
     async def tick(self) -> None:
         for candidate in await self.bans.due(now_utc()):
@@ -23,11 +28,27 @@ class BanExpiryWorker:
                         continue
                     try:
                         async with asyncio.timeout(30):
-                            if await self.discord.is_banned(guild, user):
+                            was_banned = await self.discord.is_banned(guild, user)
+                            if was_banned:
                                 await self.discord.unban(
                                     guild, user, "Requiem temporary ban expired"
                                 )
                         await self.bans.remove(guild, user)
+                        if was_banned:
+                            publish(
+                                self.audit,
+                                AuditEvent(
+                                    guild,
+                                    Kind.UNBAN,
+                                    user,
+                                    "Requiem",
+                                    fields=(
+                                        ("Reason", "Temporary ban expired"),
+                                        ("Original expiry", current.expires_at.isoformat()),
+                                        ("Original moderator", str(current.actor_id)),
+                                    ),
+                                ),
+                            )
                     except Exception:
                         # Keep retry bookkeeping under the same target lock so a
                         # concurrent replacement never inherits an old retry delay.

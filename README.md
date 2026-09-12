@@ -5,12 +5,13 @@ administrative workflows above Discord's native roles, permissions, channels and
 capabilities, while keeping Discord's authority intact.
 
 The shared core provides server configuration, role-based command access, persistence,
-and independent Discord bot and HTTP API processes. Stage 2 adds seven Moderation commands
-and PostgreSQL-backed temporary-ban expiry that recovers after bot restart.
+and independent Discord bot and HTTP API processes. Moderation provides seven commands,
+restart-safe temporary bans, independent audit logging and optional message logging.
 
 - [Development and Docker setup](docs/development.md)
 - [Architecture and configuration rules](docs/architecture.md)
 - [Moderation commands and lifecycle](docs/moderation.md)
+- [Audit and Logging](docs/audit-logging.md)
 - [Foundation verification report](docs/foundation-verification.md)
 
 The project is proprietary, source-available software and is not open source. Public access to

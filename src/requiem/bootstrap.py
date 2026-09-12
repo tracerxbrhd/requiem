@@ -6,6 +6,7 @@ from requiem.application.access import CommandAccessService
 from requiem.application.configuration import ConfigurationService
 from requiem.application.guilds import GuildService
 from requiem.application.health import HealthService
+from requiem.application.logging_configuration import LoggingConfigurationService
 from requiem.persistence.database import Database
 from requiem.settings import Settings
 
@@ -17,6 +18,7 @@ class Runtime:
     configuration: ConfigurationService
     access: CommandAccessService
     health: HealthService
+    logging_configuration: LoggingConfigurationService
 
     async def close(self) -> None:
         await self.database.close()
@@ -31,4 +33,5 @@ def build_runtime(settings: Settings) -> Runtime:
         configuration=configuration,
         access=CommandAccessService(configuration),
         health=HealthService(database),
+        logging_configuration=LoggingConfigurationService(database.sessions),
     )

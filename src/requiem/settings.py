@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     discord_token: SecretStr | None = None
     discord_application_id: int | None = Field(default=None, gt=0)
     discord_client_id: int | None = Field(default=None, gt=0)
+    message_content_intent_enabled: bool = False
+    guild_members_intent_enabled: bool = False
     api_host: str = "127.0.0.1"
     api_port: int = Field(default=8000, ge=1, le=65535)
     environment: str = "development"

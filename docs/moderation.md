@@ -129,5 +129,6 @@ official [guild endpoints](https://docs.discord.com/developers/resources/guild),
 [Hikari REST API](https://docs.hikari-py.dev/en/stable/reference/hikari/api/rest/) and
 [Arc options](https://arc.hypergonial.com/guides/options/).
 
-No audit embeds, audit-event listeners, message logging, Message Content intent, case system
-or moderation HTTP action endpoints are implemented in this stage.
+Stage 3 integrates these actions with [independent Audit and Logging](audit-logging.md).
+Successful actions enqueue an audit event; delivery failure never changes their result.
+The case system and moderation HTTP action endpoints remain outside the implemented scope.

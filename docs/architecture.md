@@ -9,6 +9,7 @@ src/requiem/
   application/            Guild, configuration, command-access and health services
   modules/catalogue.py    Explicit module and command identifiers
   modules/moderation/     Moderation rules, application service, ports and expiry worker
+  modules/moderation/audit/  Audit values, routing, queues and bounded message state
   persistence/            SQLAlchemy models, database lifecycle and repositories
   transports/discord/     Hikari lifecycle, Arc hooks and error presentation
   transports/api/         FastAPI lifecycle and health routes
@@ -39,6 +40,11 @@ adds operational lifecycle state:
 | `guild_commands` | `guild_id`, `module_name`, `command_name` | Command enabled state and access mode |
 | `command_allowed_roles` | `guild_id`, `module_name`, `command_name`, `role_id` | Custom command roles |
 | `temporary_bans` | `guild_id`, `user_id` | One authoritative expiry and retry timestamp per target |
+
+Migration `0003_logging` adds five relational Moderation logging configuration tables.
+There is no audit history or message body table. See [Audit and Logging](audit-logging.md).
+`Runtime.logging_configuration` provides atomic full-configuration replacement, with a
+root-row upsert serializing writers and repeatable-read snapshots for multi-table reads.
 
 Composite foreign keys prevent roles and commands from being attached to another guild's
 configuration. Primary keys deduplicate role assignments. Check constraints enforce positive
@@ -91,7 +97,9 @@ permissions and actor/bot hierarchy using fresh REST snapshots. Purge uses overw
 the affected channel. The Discord adapter owns Hikari calls; application services receive
 plain DTOs and never Arc contexts. See [Moderation](moderation.md) for policy and limits.
 
-Only the unprivileged `GUILDS` intent is enabled. Interaction member roles come from the
+The bot requests `GUILDS`, `GUILD_MODERATION`, `GUILD_MESSAGES` and AutoMod intents.
+Privileged Members and Message Content intents require explicit operator flags and a
+successful application-capability preflight. Interaction member roles come from the
 interaction payload. Guild join/availability marks the installation active; guild leave
 marks it inactive. Temporary guild unavailability is not treated as removal. Installation
 state reflects observed gateway events; removals while the bot is offline are not reconciled
@@ -99,7 +107,8 @@ in this milestone and the flag is not an authorization source.
 
 The bot verifies database connectivity and schema revision before starting Hikari. Arc
 follows Hikari's lifecycle. A PostgreSQL-backed expiry worker starts with the gateway,
-independently of module configuration. Cancellation and SIGTERM stop that worker, then
+independently of module configuration. Audit delivery also runs in this process with
+independent bounded high/low queues. Cancellation and SIGTERM stop workers, then
 close the gateway before disposing the database engine. There is no HTTP server inside
 the bot process.
 
@@ -128,5 +137,6 @@ library; PostgreSQL readiness uses `pg_isready`. No fake bot healthcheck is prov
 
 The disabled-by-default policy, empty-role denial, lack of owner/admin Requiem bypass,
 and installation-state semantics remain unchanged. Configuration has application services
-but no user-facing management UI or API yet. Authentication, general schedules, audit/logging
-features and frontend work remain outside this milestone.
+but no user-facing management UI or API yet. Authentication, general schedules and frontend
+work remain outside this milestone. Logging switches are independent of command switches;
+configuration changes themselves are not audited.

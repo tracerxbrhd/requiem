@@ -5,6 +5,7 @@ from datetime import datetime
 
 import hikari
 
+from requiem.modules.moderation.audit.cache import EchoSuppressor
 from requiem.modules.moderation.domain import (
     Authority,
     Failure,
@@ -65,8 +66,9 @@ async def rest_call[T](request: Awaitable[T]) -> T:
 
 
 class HikariModerationAdapter:
-    def __init__(self, rest: hikari.api.RESTClient) -> None:
+    def __init__(self, rest: hikari.api.RESTClient, echoes: EchoSuppressor | None = None) -> None:
         self.rest = rest
+        self.echoes = echoes or EchoSuppressor()
 
     async def _member(self, guild: int, user: int) -> hikari.Member | None:
         try:
@@ -132,14 +134,15 @@ class HikariModerationAdapter:
     async def timeout(
         self, guild_id: int, user_id: int, until: datetime | None, reason: str | None
     ) -> None:
-        await rest_call(
-            self.rest.edit_member(
-                guild_id,
-                user_id,
-                communication_disabled_until=until,
-                reason=reason if reason is not None else hikari.UNDEFINED,
+        with self.echoes.expect(((guild_id, "timeout", user_id),)):
+            await rest_call(
+                self.rest.edit_member(
+                    guild_id,
+                    user_id,
+                    communication_disabled_until=until,
+                    reason=reason if reason is not None else hikari.UNDEFINED,
+                )
             )
-        )
 
     async def kick(self, guild_id: int, user_id: int, reason: str | None) -> None:
         await rest_call(
@@ -151,14 +154,15 @@ class HikariModerationAdapter:
     async def ban(
         self, guild_id: int, user_id: int, delete_seconds: int, reason: str | None
     ) -> None:
-        await rest_call(
-            self.rest.ban_user(
-                guild_id,
-                user_id,
-                delete_message_seconds=delete_seconds,
-                reason=reason if reason is not None else hikari.UNDEFINED,
+        with self.echoes.expect(((guild_id, "ban", user_id),)):
+            await rest_call(
+                self.rest.ban_user(
+                    guild_id,
+                    user_id,
+                    delete_message_seconds=delete_seconds,
+                    reason=reason if reason is not None else hikari.UNDEFINED,
+                )
             )
-        )
 
     async def is_banned(self, guild_id: int, user_id: int) -> bool:
         async def fetch() -> bool:
@@ -173,16 +177,18 @@ class HikariModerationAdapter:
         return await rest_call(fetch())
 
     async def unban(self, guild_id: int, user_id: int, reason: str | None) -> None:
-        async def remove() -> None:
-            try:
-                await self.rest.unban_user(
-                    guild_id, user_id, reason=reason if reason is not None else hikari.UNDEFINED
-                )
-            except hikari.NotFoundError as error:
-                if error.code != 10026:
-                    raise
+        with self.echoes.expect(((guild_id, "unban", user_id),)):
 
-        await rest_call(remove())
+            async def remove() -> None:
+                try:
+                    await self.rest.unban_user(
+                        guild_id, user_id, reason=reason if reason is not None else hikari.UNDEFINED
+                    )
+                except hikari.NotFoundError as error:
+                    if error.code != 10026:
+                        raise
+
+            await rest_call(remove())
 
     async def messages(self, channel_id: int, before: int | None) -> Sequence[Message]:
         async def fetch() -> Sequence[Message]:

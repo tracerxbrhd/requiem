@@ -67,12 +67,19 @@ async def test_bot_wiring_and_guild_lifecycle(settings: Settings) -> None:
     )
     runtime = Mock(spec=Runtime)
     runtime.database = Mock()
+    runtime.logging_configuration = Mock()
     runtime.access = Mock()
     runtime.configuration = Mock()
     runtime.guilds = Mock()
     runtime.guilds.set_installed = AsyncMock()
     bot, client = create_bot(bot_settings, runtime)
-    assert bot.intents == hikari.Intents.GUILDS
+    assert bot.intents == (
+        hikari.Intents.GUILDS
+        | hikari.Intents.GUILD_MESSAGES
+        | hikari.Intents.GUILD_MODERATION
+        | hikari.Intents.AUTO_MODERATION_CONFIGURATION
+        | hikari.Intents.AUTO_MODERATION_EXECUTION
+    )
     assert {command.name for command in client.walk_commands(hikari.CommandType.SLASH)} == {
         "warn",
         "timeout",
@@ -119,6 +126,7 @@ async def test_purge_callback_current_and_selected_channel(
 ) -> None:
     runtime = Mock(spec=Runtime)
     runtime.database = Mock()
+    runtime.logging_configuration = Mock()
     runtime.access = Mock()
     runtime.configuration = Mock()
     runtime.guilds = Mock()
@@ -167,8 +175,10 @@ async def test_bot_closes_gateway_and_database_on_cancellation(
     bot.start = AsyncMock()
     bot.join = AsyncMock(side_effect=asyncio.CancelledError())
     bot.close = AsyncMock()
+    client = Mock()
+    client.get_type_dependency.return_value.close = AsyncMock()
     monkeypatch.setattr("requiem.transports.discord.bot.build_runtime", lambda _: runtime)
-    monkeypatch.setattr("requiem.transports.discord.bot.create_bot", lambda *_: (bot, Mock()))
+    monkeypatch.setattr("requiem.transports.discord.bot.create_bot", lambda *_: (bot, client))
     with pytest.raises(asyncio.CancelledError):
         await run_bot(settings)
     bot.close.assert_awaited_once()

@@ -123,3 +123,73 @@ class TemporaryBanRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     actor_id: Mapped[int] = mapped_column(BigInteger)
     reason: Mapped[str | None] = mapped_column(String(512))
+
+
+class LoggingRecord(Base):
+    __tablename__ = "moderation_logging"
+    __table_args__ = (CheckConstraint("default_channel_id > 0", name="positive_channel"),)
+    guild_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("guilds.guild_id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    default_channel_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class LoggingCategoryRecord(Base):
+    __tablename__ = "moderation_logging_categories"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('moderation', 'messages', 'members', "
+            "'server', 'automod', 'message_logging')",
+            name="known_category",
+        ),
+        CheckConstraint("channel_id > 0", name="positive_channel"),
+    )
+    guild_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("moderation_logging.guild_id", ondelete="CASCADE"), primary_key=True
+    )
+    category: Mapped[str] = mapped_column(String(32), primary_key=True)
+    channel_id: Mapped[int] = mapped_column(BigInteger)
+
+
+class LoggingEventRecord(Base):
+    __tablename__ = "moderation_logging_events"
+    __table_args__ = (CheckConstraint("channel_id > 0", name="positive_channel"),)
+    guild_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("moderation_logging.guild_id", ondelete="CASCADE"), primary_key=True
+    )
+    event: Mapped[str] = mapped_column(String(48), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    channel_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class MessageLoggingRecord(Base):
+    __tablename__ = "moderation_message_logging"
+    __table_args__ = (
+        CheckConstraint(
+            "scope IN ('all_except_exclusions', 'selected_channels_only')", name="known_scope"
+        ),
+    )
+    guild_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("moderation_logging.guild_id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+    scope: Mapped[str] = mapped_column(String(32), server_default=text("'all_except_exclusions'"))
+    include_bots: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    include_webhooks: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+
+
+class MessageLoggingChannelRecord(Base):
+    __tablename__ = "moderation_message_logging_channels"
+    __table_args__ = (CheckConstraint("channel_id > 0", name="positive_channel"),)
+    guild_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("moderation_message_logging.guild_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    channel_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)

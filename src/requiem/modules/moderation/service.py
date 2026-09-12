@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta
 
+from requiem.modules.moderation.audit.cache import EchoSuppressor
+from requiem.modules.moderation.audit.delivery import AuditSink, publish
+from requiem.modules.moderation.audit.domain import AuditEvent, Kind
 from requiem.modules.moderation.domain import (
     Failure,
     ModerationError,
@@ -16,16 +19,51 @@ from requiem.modules.moderation.ports import BanStore, DiscordModeration
 
 
 class ModerationService:
-    def __init__(self, discord: DiscordModeration, bans: BanStore) -> None:
+    def __init__(
+        self,
+        discord: DiscordModeration,
+        bans: BanStore,
+        audit: AuditSink | None = None,
+        echoes: EchoSuppressor | None = None,
+    ) -> None:
         self.discord = discord
         self.bans = bans
+        self.audit = audit
+        self.echoes = echoes or EchoSuppressor()
+
+    def _audit(
+        self,
+        kind: Kind,
+        guild: int,
+        actor: int,
+        target: int | None,
+        text: str | None,
+        *,
+        channel: int | None = None,
+        details: tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        publish(
+            self.audit,
+            AuditEvent(
+                guild,
+                kind,
+                target,
+                actor,
+                channel,
+                fields=(*details, ("Reason", text)) if text is not None else details,
+            ),
+        )
 
     async def warn(self, guild: int, actor: int, target: int, text: str) -> bool:
         validated = reason(text, required=True)
         assert validated is not None
         authority = await self.discord.authority(guild, actor, target)
         authorize(authority, Permission.NONE, target, member_required=True)
-        return await self.discord.warn_dm(target, authority.guild_name, validated)
+        notified = await self.discord.warn_dm(target, authority.guild_name, validated)
+        self._audit(
+            Kind.WARN, guild, actor, target, validated, details=(("DM delivered", str(notified)),)
+        )
+        return notified
 
     async def timeout(
         self, guild: int, actor: int, target: int, value: str, text: str | None = None
@@ -38,6 +76,9 @@ class ModerationService:
         authorize(authority, Permission.TIMEOUT, target, member_required=True, timeout=True)
         until = now_utc() + interval
         await self.discord.timeout(guild, target, until, validated)
+        self._audit(
+            Kind.TIMEOUT, guild, actor, target, validated, details=(("Expiry", until.isoformat()),)
+        )
         return until
 
     async def untimeout(self, guild: int, actor: int, target: int, text: str | None = None) -> None:
@@ -49,12 +90,14 @@ class ModerationService:
         if member.timed_out_until is None or member.timed_out_until <= now_utc():
             raise ModerationError(Failure.NOT_TIMED_OUT)
         await self.discord.timeout(guild, target, None, validated)
+        self._audit(Kind.UNTIMEOUT, guild, actor, target, validated)
 
     async def kick(self, guild: int, actor: int, target: int, text: str | None = None) -> None:
         validated = reason(text)
         authority = await self.discord.authority(guild, actor, target)
         authorize(authority, Permission.KICK, target, member_required=True)
         await self.discord.kick(guild, target, validated)
+        self._audit(Kind.KICK, guild, actor, target, validated)
 
     async def ban(
         self,
@@ -90,6 +133,17 @@ class ModerationService:
                 # Only acknowledge permanent conversion after cancelling old expiry.
                 # On crash/DB failure the old expiry remains, favoring reversibility.
                 await self.bans.remove(guild, target)
+            self._audit(
+                Kind.BAN,
+                guild,
+                actor,
+                target,
+                validated,
+                details=(
+                    ("Expiry", until.isoformat() if until else "Permanent"),
+                    ("Delete history seconds", str(int(deletion.total_seconds()))),
+                ),
+            )
             return until
 
     async def unban(self, guild: int, actor: int, target: str, text: str | None = None) -> int:
@@ -103,6 +157,7 @@ class ModerationService:
                 raise ModerationError(Failure.NOT_BANNED)
             await self.discord.unban(guild, target_id, validated)
             await self.bans.remove(guild, target_id)
+        self._audit(Kind.UNBAN, guild, actor, target_id, validated)
         return target_id
 
     async def purge(
@@ -153,5 +208,15 @@ class ModerationService:
         ids = [key for key, created in selected.items() if created > cutoff]
         if not ids:
             raise ModerationError(Failure.NO_MESSAGES)
-        await self.discord.delete(channel, ids, validated)
+        with self.echoes.expect(tuple((guild, "delete", message) for message in ids)):
+            await self.discord.delete(channel, ids, validated)
+        self._audit(
+            Kind.PURGE,
+            guild,
+            actor,
+            member,
+            validated,
+            channel=channel,
+            details=(("Messages removed", str(len(ids))),),
+        )
         return len(ids)

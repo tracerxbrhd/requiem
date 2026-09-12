@@ -38,6 +38,8 @@ Empty optional values are ignored. Run local commands from the repository root.
 | --- | --- |
 | `REQUIEM_DATABASE_URL` | Required by API, bot and migrations; must use `postgresql+psycopg` |
 | `REQUIEM_DISCORD_TOKEN` | Required only by `requiem-bot` |
+| `REQUIEM_MESSAGE_CONTENT_INTENT_ENABLED` | Defaults to false; opt in to privileged content capability |
+| `REQUIEM_GUILD_MEMBERS_INTENT_ENABLED` | Defaults to false; opt in to privileged member observation |
 | `REQUIEM_DISCORD_APPLICATION_ID` | Optional positive Discord application ID; reserved for later integrations |
 | `REQUIEM_DISCORD_CLIENT_ID` | Optional positive client ID; no OAuth2 flow yet |
 | `REQUIEM_API_HOST` | Defaults to `127.0.0.1`; Compose overrides to `0.0.0.0` internally |
@@ -192,6 +194,15 @@ Integration tests exercise real PostgreSQL, SQLAlchemy asyncio, foreign keys, st
 concurrent role replacement, installation preservation and migration/model agreement.
 They also exercise durable temporary-ban state, advisory locks across store instances,
 expiry while Moderation is disabled, and the `0001_core` to `0002_temporary_bans` upgrade.
+Stage 3 extends this through `0003_logging`, including logging configuration defaults,
+relational replacement and validation. Unit tests cover routing, diagnostics, Gateway
+adapters, echo suppression, content scope, cache bounds, edit chains and queue overload.
+
+Enable optional privileged intents in the Discord Developer Portal and set the matching
+environment flag, then restart the bot. Startup checks application flags before requesting
+them; unavailable or unverified capabilities are disabled for that run. Logging diagnostics
+expose the resulting capabilities. See [Audit and Logging](audit-logging.md) for the
+configuration contract, permissions and delivery limitations.
 
 The GitHub Actions workflow performs locked dependency installation, lint, format, strict
 type checking, the complete test suite with a PostgreSQL service, and Compose validation.
