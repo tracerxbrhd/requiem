@@ -77,8 +77,9 @@ postgresql+psycopg://requiem:requiem@127.0.0.1:5432/requiem
 ```
 
 Check [liveness](http://127.0.0.1:8000/health/live) and
-[readiness](http://127.0.0.1:8000/health/ready). There are no moderation commands or
-configuration endpoints yet. Use the supplied entry points on Windows: they select an
+[readiness](http://127.0.0.1:8000/health/ready). The bot registers the seven
+[Moderation commands](moderation.md); configuration endpoints are not implemented yet.
+Use the supplied entry points on Windows: they select an
 asyncio loop compatible with Psycopg. Generic ASGI launchers may choose an incompatible
 Windows Proactor loop.
 
@@ -145,7 +146,8 @@ docker compose down -v
 docker compose up --build -d api
 ```
 
-**`down -v` destroys the local Docker database data**, including guild configuration.
+**`down -v` destroys the local Docker database data**, including guild configuration and
+pending temporary-ban expirations. Losing those records prevents automatic unbanning.
 The new volume starts empty and the migration service recreates the schema. Do not use it
 when you need to preserve data. No reset command is run automatically by the application.
 
@@ -160,6 +162,8 @@ uv run --locked pytest
 
 Tests without PostgreSQL cover configuration rules, settings, redacted logs, ephemeral
 Discord errors, dependency wiring, shutdown cleanup and API readiness/liveness behaviour.
+Moderation tests cover native permissions, hierarchy, channel overwrites, durations,
+reason propagation, purge pagination and failure/restart/concurrency handling for bans.
 PostgreSQL tests are explicitly skipped when `TEST_DATABASE_URL` is absent.
 
 To run all tests, create a dedicated database in the local development PostgreSQL instance:
@@ -186,6 +190,8 @@ it from empty, and removes only that schema afterward. Migration round-trip test
 downgrade the normal development schema. The test user needs schema creation privileges.
 Integration tests exercise real PostgreSQL, SQLAlchemy asyncio, foreign keys, state isolation,
 concurrent role replacement, installation preservation and migration/model agreement.
+They also exercise durable temporary-ban state, advisory locks across store instances,
+expiry while Moderation is disabled, and the `0001_core` to `0002_temporary_bans` upgrade.
 
 The GitHub Actions workflow performs locked dependency installation, lint, format, strict
 type checking, the complete test suite with a PostgreSQL service, and Compose validation.

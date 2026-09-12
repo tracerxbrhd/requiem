@@ -11,6 +11,7 @@ from requiem.application.access import CommandAccessService
 from requiem.application.health import Readiness
 from requiem.bootstrap import Runtime
 from requiem.domain.access import AccessResult
+from requiem.modules.moderation.service import ModerationService
 from requiem.settings import Settings
 from requiem.transports.discord.bot import create_bot, run_bot
 from requiem.transports.discord.guards import (
@@ -65,17 +66,37 @@ async def test_bot_wiring_and_guild_lifecycle(settings: Settings) -> None:
         update={"discord_token": SecretStr("MTIzNDU2Nzg5.test.signature")}
     )
     runtime = Mock(spec=Runtime)
+    runtime.database = Mock()
     runtime.access = Mock()
     runtime.configuration = Mock()
     runtime.guilds = Mock()
     runtime.guilds.set_installed = AsyncMock()
     bot, client = create_bot(bot_settings, runtime)
     assert bot.intents == hikari.Intents.GUILDS
-    assert not list(client.walk_commands(hikari.CommandType.SLASH))
+    assert {command.name for command in client.walk_commands(hikari.CommandType.SLASH)} == {
+        "warn",
+        "timeout",
+        "untimeout",
+        "kick",
+        "ban",
+        "unban",
+        "purge",
+    }
     runtime.access.check = AsyncMock(return_value=AccessResult.ALLOWED)
     context = Mock(spec=arc.GatewayContext)
     context.guild_id = hikari.Snowflake(123)
     context.member = Mock(role_ids=[hikari.Snowflake(456)])
+    for command in client.walk_commands(hikari.CommandType.SLASH):
+        assert isinstance(command, arc.SlashCommand)
+        assert command.guilds is hikari.UNDEFINED
+        assert len(command.hooks) == 1
+        assert command.default_permissions is hikari.UNDEFINED
+        assert command.autodefer is arc.AutodeferMode.EPHEMERAL
+        await client.injector.call_with_async_di(command.hooks[0], context)
+        runtime.access.check.assert_awaited_with(
+            123, "moderation", command.name, frozenset({123, 456})
+        )
+    runtime.access.check.reset_mock()
     await client.injector.call_with_async_di(command_guard("moderation", "ban"), context)
     runtime.access.check.assert_awaited_once_with(123, "moderation", "ban", frozenset({123, 456}))
     assert client.get_type_dependency(CommandAccessService) is runtime.access
@@ -90,6 +111,35 @@ async def test_bot_wiring_and_guild_lifecycle(settings: Settings) -> None:
         await callbacks[0](cast(hikari.GuildEvent, Mock(guild_id=hikari.Snowflake(123))))
         runtime.guilds.set_installed.assert_awaited_with(123, installed)
     assert not bot.event_manager.get_listeners(hikari.GuildUnavailableEvent, polymorphic=False)
+
+
+@pytest.mark.parametrize("selected", [None, 789])
+async def test_purge_callback_current_and_selected_channel(
+    settings: Settings, selected: int | None
+) -> None:
+    runtime = Mock(spec=Runtime)
+    runtime.database = Mock()
+    runtime.access = Mock()
+    runtime.configuration = Mock()
+    runtime.guilds = Mock()
+    _, client = create_bot(
+        settings.model_copy(update={"discord_token": SecretStr("MTIzNDU2Nzg5.test.signature")}),
+        runtime,
+    )
+    command = next(c for c in client.walk_commands(hikari.CommandType.SLASH) if c.name == "purge")
+    assert isinstance(command, arc.SlashCommand)
+    service = Mock(spec=ModerationService)
+    service.purge.return_value = 2
+    context = Mock(spec=arc.GatewayContext)
+    context.guild_id = hikari.Snowflake(123)
+    context.author = Mock(id=456)
+    context.channel_id = hikari.Snowflake(100)
+    context.respond = AsyncMock()
+    await command.callback(
+        context, 3, channel=Mock(id=selected) if selected else None, service=service
+    )
+    service.purge.assert_awaited_once_with(123, 456, 3, selected or 100, None, None)
+    assert context.respond.call_args.kwargs["flags"] == hikari.MessageFlag.EPHEMERAL
 
 
 async def test_bot_closes_database_when_startup_fails(

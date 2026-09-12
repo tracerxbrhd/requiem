@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from requiem.settings import Settings
 
-SCHEMA_REVISION = "0001_core"
+SCHEMA_REVISION = "0002_temporary_bans"
 
 
 class Database:

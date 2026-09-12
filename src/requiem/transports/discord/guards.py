@@ -9,6 +9,7 @@ import hikari
 from requiem.application.access import CommandAccessService
 from requiem.domain.access import AccessResult
 from requiem.modules.catalogue import CATALOGUE
+from requiem.modules.moderation.domain import ModerationError
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,12 @@ def command_guard(module_name: str, command_name: str) -> Callable[..., Awaitabl
 async def command_error_handler(context: arc.GatewayContext, error: Exception) -> None:
     if isinstance(error, CommandAccessDenied):
         message = ACCESS_MESSAGES[error.result]
+    elif isinstance(error, ModerationError):
+        message = error.failure.value
+    elif isinstance(error, arc.OptionConverterFailureError):
+        message = (
+            "The selected member or option is unavailable. Please check the command arguments."
+        )
     else:
         logger.error(
             "Command failed (guild_id=%s, command=%s)",

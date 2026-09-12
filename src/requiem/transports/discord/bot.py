@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import signal
+from contextlib import suppress
 
 import arc
 import hikari
@@ -10,9 +11,14 @@ from requiem.application.configuration import ConfigurationService
 from requiem.application.guilds import GuildService
 from requiem.bootstrap import Runtime, build_runtime
 from requiem.logging import configure_logging
+from requiem.modules.moderation.expiry import BanExpiryWorker
+from requiem.modules.moderation.service import ModerationService
+from requiem.persistence.temporary_bans import PostgresBanStore
 from requiem.runtime import new_event_loop
 from requiem.settings import Settings, load_settings
 from requiem.transports.discord.guards import command_error_handler
+from requiem.transports.discord.moderation_adapter import HikariModerationAdapter
+from requiem.transports.discord.moderation_commands import register_moderation
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +40,11 @@ def create_bot(settings: Settings, runtime: Runtime) -> tuple[hikari.GatewayBot,
     client.set_type_dependency(ConfigurationService, runtime.configuration)
     client.set_type_dependency(GuildService, runtime.guilds)
     client.set_error_handler(command_error_handler)
+    client.set_type_dependency(
+        ModerationService,
+        ModerationService(HikariModerationAdapter(bot.rest), PostgresBanStore(runtime.database)),
+    )
+    register_moderation(client)
 
     async def on_available(event: hikari.GuildAvailableEvent | hikari.GuildJoinEvent) -> None:
         await runtime.guilds.set_installed(int(event.guild_id), True)
@@ -51,6 +62,7 @@ def create_bot(settings: Settings, runtime: Runtime) -> tuple[hikari.GatewayBot,
 async def run_bot(settings: Settings) -> None:
     runtime = build_runtime(settings)
     bot: hikari.GatewayBot | None = None
+    expiry_task: asyncio.Task[None] | None = None
     try:
         if not (await runtime.health.check()).ready:
             raise RuntimeError(
@@ -58,10 +70,18 @@ async def run_bot(settings: Settings) -> None:
             )
         bot, _client = create_bot(settings, runtime)
         await bot.start()
+        worker = BanExpiryWorker(
+            HikariModerationAdapter(bot.rest), PostgresBanStore(runtime.database)
+        )
+        expiry_task = asyncio.create_task(worker.run(), name="temporary-ban-expiry")
         logger.info("Discord gateway started")
         await bot.join()
     finally:
         try:
+            if expiry_task is not None:
+                expiry_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await expiry_task
             if bot is not None and bot.is_alive:
                 await bot.close()
         finally:

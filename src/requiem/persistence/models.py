@@ -105,3 +105,21 @@ class CommandRoleRecord(Base):
     module_name: Mapped[str] = mapped_column(String(64), primary_key=True)
     command_name: Mapped[str] = mapped_column(String(64), primary_key=True)
     role_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+
+class TemporaryBanRecord(Base):
+    __tablename__ = "temporary_bans"
+    __table_args__ = (
+        CheckConstraint("user_id > 0 AND actor_id > 0", name="positive_ids"),
+        CheckConstraint("next_attempt_at >= expires_at", name="retry_after_expiry"),
+    )
+
+    guild_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("guilds.guild_id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    actor_id: Mapped[int] = mapped_column(BigInteger)
+    reason: Mapped[str | None] = mapped_column(String(512))

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from requiem.bootstrap import Runtime
 from requiem.domain.access import AccessResult
 from requiem.domain.configuration import AccessMode, CommandConfiguration, ModuleConfiguration
+from requiem.persistence.database import SCHEMA_REVISION
 from requiem.persistence.models import Base, CommandRecord, ModuleRoleRecord
 
 pytestmark = pytest.mark.integration
@@ -170,4 +171,7 @@ async def test_database_with_missing_revision_is_not_ready(runtime: Runtime) -> 
         assert not (await runtime.health.check()).ready
     finally:
         async with runtime.database.engine.begin() as connection:
-            await connection.execute(text("UPDATE alembic_version SET version_num = '0001_core'"))
+            await connection.execute(
+                text("UPDATE alembic_version SET version_num = :revision"),
+                {"revision": SCHEMA_REVISION},
+            )

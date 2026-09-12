@@ -8,6 +8,7 @@ src/requiem/
   domain/                 Immutable configuration values and access decisions
   application/            Guild, configuration, command-access and health services
   modules/catalogue.py    Explicit module and command identifiers
+  modules/moderation/     Moderation rules, application service, ports and expiry worker
   persistence/            SQLAlchemy models, database lifecycle and repositories
   transports/discord/     Hikari lifecycle, Arc hooks and error presentation
   transports/api/         FastAPI lifecycle and health routes
@@ -27,7 +28,8 @@ dynamic plugin loader. Arc receives process-owned services through dependency in
 
 ## Schema
 
-Migration `0001_core` creates these tables:
+Migration `0001_core` creates the five configuration tables; `0002_temporary_bans`
+adds operational lifecycle state:
 
 | Table | Key | Purpose |
 | --- | --- | --- |
@@ -36,6 +38,7 @@ Migration `0001_core` creates these tables:
 | `module_allowed_roles` | `guild_id`, `module_name`, `role_id` | Module default roles |
 | `guild_commands` | `guild_id`, `module_name`, `command_name` | Command enabled state and access mode |
 | `command_allowed_roles` | `guild_id`, `module_name`, `command_name`, `role_id` | Custom command roles |
+| `temporary_bans` | `guild_id`, `user_id` | One authoritative expiry and retry timestamp per target |
 
 Composite foreign keys prevent roles and commands from being attached to another guild's
 configuration. Primary keys deduplicate role assignments. Check constraints enforce positive
@@ -69,9 +72,8 @@ Custom roles remain stored when switching back to `inherit`. Changing custom rol
 implicitly change access mode. The enabled state of a command remains stored when its module
 is disabled. Installation state is separate from configuration defaults.
 
-The catalogue reserves `warn`, `timeout`, `untimeout`, `kick`, `ban`, `unban` and `purge`
-as configuration identifiers only. No feature command is registered or implemented yet.
-Future commands stay globally registered with runtime guards; modules do not imply slash
+The catalogue identifies `warn`, `timeout`, `untimeout`, `kick`, `ban`, `unban` and `purge`.
+All seven are implemented as global top-level commands with runtime guards; modules do not imply slash
 command groups. Add new feature definitions explicitly in `modules/catalogue.py`.
 
 ## Discord boundary
@@ -84,9 +86,10 @@ ephemeral message. Unexpected errors are logged with context and a generic ephem
 The client's automatic defer is ephemeral too, so a slow database lookup cannot make an
 access-denied response public. Future commands should preserve that defer policy.
 
-Requiem access is only one gate. Stage 2 must add the corresponding native Discord
-permissions, bot permissions and role hierarchy checks before executing an action. Do not
-treat passing this foundation guard as authorization to call a moderation API.
+Requiem access is only one gate. The Moderation service additionally checks native Discord
+permissions and actor/bot hierarchy using fresh REST snapshots. Purge uses overwrites in
+the affected channel. The Discord adapter owns Hikari calls; application services receive
+plain DTOs and never Arc contexts. See [Moderation](moderation.md) for policy and limits.
 
 Only the unprivileged `GUILDS` intent is enabled. Interaction member roles come from the
 interaction payload. Guild join/availability marks the installation active; guild leave
@@ -95,8 +98,10 @@ state reflects observed gateway events; removals while the bot is offline are no
 in this milestone and the flag is not an authorization source.
 
 The bot verifies database connectivity and schema revision before starting Hikari. Arc
-follows Hikari's lifecycle. Cancellation and SIGTERM close the gateway before disposing the
-database engine. There is no HTTP server inside the bot process.
+follows Hikari's lifecycle. A PostgreSQL-backed expiry worker starts with the gateway,
+independently of module configuration. Cancellation and SIGTERM stop that worker, then
+close the gateway before disposing the database engine. There is no HTTP server inside
+the bot process.
 
 ## HTTP boundary and readiness
 
@@ -121,7 +126,7 @@ Compose starts healthy PostgreSQL, then one migration service, then independent 
 services. Neither application migrates on startup. API readiness uses Python's standard
 library; PostgreSQL readiness uses `pg_isready`. No fake bot healthcheck is provided.
 
-Before stage 2, review the disabled-by-default policy, empty-role denial, lack of owner/admin
-bypass, and installation-state semantics above. Configuration has application services but no
-user-facing management UI or API yet. Authentication, moderation actions, schedules, logging
-features and frontend work remain outside this foundation.
+The disabled-by-default policy, empty-role denial, lack of owner/admin Requiem bypass,
+and installation-state semantics remain unchanged. Configuration has application services
+but no user-facing management UI or API yet. Authentication, general schedules, audit/logging
+features and frontend work remain outside this milestone.
