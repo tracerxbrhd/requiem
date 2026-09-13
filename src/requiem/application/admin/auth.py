@@ -1,10 +1,14 @@
 """Browser-bound code grants and encrypted, opaque PostgreSQL sessions."""
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
+import logging
+import math
 import secrets
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -21,6 +25,47 @@ from requiem.settings import Settings
 
 # Current moderation, audit delivery/history and AutoMod gateway observation.
 INSTALL_PERMISSIONS = sum(1 << bit for bit in (1, 2, 5, 10, 11, 13, 14, 16, 40))
+logger = logging.getLogger(__name__)
+
+
+def retry_delay(response: httpx.Response) -> float | None:
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    candidates = [response.headers.get("Retry-After")]
+    if isinstance(body, dict):
+        candidates.append(body.get("retry_after"))
+    for value in candidates:
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            continue
+        try:
+            seconds = float(value)
+        except (ValueError, OverflowError):
+            continue
+        # Input sanity bound, not a Discord bucket duration. Unknown delays are not retried.
+        if math.isfinite(seconds) and 0 <= seconds <= 86400:
+            return seconds
+    return None
+
+
+def rate_limited(response: httpx.Response, endpoint: str) -> AdminError:
+    delay = retry_delay(response)
+    scope = response.headers.get("X-RateLimit-Scope")
+    logger.warning(
+        "Discord OAuth rate limited",
+        extra={
+            "endpoint_family": endpoint,
+            "retry_after": delay,
+            "rate_limit_scope": scope if scope in {"user", "global", "shared"} else None,
+        },
+    )
+    return AdminError(
+        "discord_rate_limited",
+        "Discord is rate limiting requests. Please retry shortly.",
+        429,
+        retry_after=delay,
+    )
 
 
 def digest(value: str) -> str:
@@ -38,9 +83,16 @@ class Principal:
 
 
 class DiscordOAuth:
-    def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient,
+        *,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self.settings = settings
         self.client = client
+        self.sleep = sleep
 
     async def token(self, fields: dict[str, str]) -> dict[str, Any]:
         secret = self.settings.discord_client_secret
@@ -54,6 +106,8 @@ class DiscordOAuth:
             )
             if response.status_code in (400, 401):
                 raise AdminError("session_expired", "Please sign in with Discord again.", 401)
+            if response.status_code == 429:
+                raise rate_limited(response, "oauth_token")
             response.raise_for_status()
             data: dict[str, Any] = response.json()
             if not all(key in data for key in ("access_token", "refresh_token", "expires_in")):
@@ -67,15 +121,32 @@ class DiscordOAuth:
 
     async def get(self, path: str, token: str) -> Any:
         try:
-            response = await self.client.get(
-                "https://discord.com/api/v10" + path,
-                headers={"Authorization": "Bearer " + token},
-            )
+            for attempt in range(2):
+                response = await self.client.get(
+                    "https://discord.com/api/v10" + path,
+                    headers={"Authorization": "Bearer " + token},
+                )
+                if response.status_code != 429:
+                    break
+                error = rate_limited(
+                    response, "user_guilds" if path.startswith("/users/@me/guilds") else "user"
+                )
+                if attempt == 0 and error.retry_after is not None and error.retry_after <= 2:
+                    await self.sleep(error.retry_after)
+                else:
+                    raise error
             if response.status_code == 401:
                 raise AdminError("session_expired", "Please sign in with Discord again.", 401)
+            if response.status_code == 403:
+                raise AdminError("forbidden_guild", "Discord denied access to this resource.", 403)
             response.raise_for_status()
-            return response.json()
-        except (httpx.HTTPError, ValueError):
+            try:
+                return response.json()
+            except ValueError:
+                raise AdminError(
+                    "discord_invalid_response", "Discord returned an invalid response.", 502
+                ) from None
+        except httpx.HTTPError:
             raise AdminError(
                 "discord_unavailable", "Discord is unavailable. Please retry.", 503
             ) from None
@@ -88,6 +159,7 @@ class AuthenticationService:
         self.sessions = sessions
         self.settings = settings
         self.oauth = oauth
+        self.invalidate_authorization: Callable[[str], None] = lambda key: None
         secret = settings.session_secret
         self.cipher = (
             Fernet(
@@ -263,6 +335,7 @@ class AuthenticationService:
             await session.execute(
                 delete(AdminSessionRecord).where(AdminSessionRecord.session_hash == digest(opaque))
             )
+        self.invalidate_authorization(digest(opaque))
 
     @staticmethod
     def check_csrf(principal: Principal, csrf: str) -> None:

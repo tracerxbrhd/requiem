@@ -50,7 +50,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(AdminError)
     async def administration_error(request: Request, error: AdminError) -> JSONResponse:
         return JSONResponse(
-            {"error": {"code": error.code, "message": error.message}}, status_code=error.status
+            {
+                "error": {
+                    "code": error.code,
+                    "message": error.message,
+                    **({"retry_after": error.retry_after} if error.retry_after is not None else {}),
+                }
+            },
+            status_code=error.status,
         )
 
     @app.exception_handler(RequestValidationError)

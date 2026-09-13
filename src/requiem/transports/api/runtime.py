@@ -51,10 +51,14 @@ async def administration_runtime(
                 effective.message_content_intent_enabled, effective.guild_members_intent_enabled
             )
             delivery = DiscordAuditDeliveryAdapter(rest)
+        metadata = DiscordAdminMetadata(rest)
+        guilds = AdministrationGuilds(runtime.database.sessions, auth, metadata)
+        stack.push_async_callback(metadata.close)
+        stack.push_async_callback(guilds.snapshots.close)
         yield Administration(
             settings,
             auth,
-            AdministrationGuilds(runtime.database.sessions, auth, DiscordAdminMetadata(rest)),
+            guilds,
             AdministrationConfiguration(runtime.database.sessions, runtime.logging_configuration),
             LoggingDiagnosticsService(runtime.logging_configuration, delivery, capabilities),
         )

@@ -1,8 +1,16 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+    useContext,
+    useEffect,
+    useId,
+    useRef,
+    useState,
+    type ReactNode,
+} from 'react';
 import { AlertCircle, Check, Search, Shield, X } from 'lucide-react';
 import { useBlocker } from 'react-router-dom';
 import type { Entity } from './api';
 import { locale } from './locale';
+import { SelectorMetadata } from './metadata';
 export function Brand() {
     return (
         <span className="brand">
@@ -185,6 +193,8 @@ export function Selector({
     multiple?: boolean;
 }) {
     const [query, setQuery] = useState('');
+    const metadata = useContext(SelectorMetadata);
+    const unavailable = metadata && metadata.status !== 'ready';
     const id = useId();
     const shown = options.filter((x) =>
         x.name.toLowerCase().includes(query.toLowerCase()),
@@ -192,9 +202,26 @@ export function Selector({
     return (
         <fieldset className="selector">
             <legend>{label}</legend>
+            {unavailable && (
+                <div role="status" className="callout warning">
+                    <div>
+                        <p>
+                            {metadata.status === 'loading'
+                                ? 'Loading metadata…'
+                                : metadata.error}
+                        </p>
+                        {metadata.status !== 'loading' && (
+                            <button type="button" onClick={metadata.retry}>
+                                Retry metadata
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
             <div className="search">
                 <Search size={16} />
                 <input
+                    disabled={!!unavailable}
                     id={id}
                     aria-label={`Search ${label}`}
                     placeholder="Search by name…"
@@ -206,8 +233,9 @@ export function Selector({
                 {value.map((x) => (
                     <span className="chip" key={x}>
                         {options.find((o) => o.id === x)?.name ??
-                            'Unavailable selection'}
+                            `${metadata?.kind ?? 'ID'} ${x}`}
                         <button
+                            disabled={!!unavailable}
                             aria-label={`Remove ${options.find((o) => o.id === x)?.name ?? x}`}
                             onClick={() =>
                                 onChange(value.filter((v) => v !== x))
@@ -223,6 +251,7 @@ export function Selector({
                 {!multiple && (
                     <label>
                         <input
+                            disabled={!!unavailable}
                             type="radio"
                             name={id}
                             checked={!value.length}
@@ -234,6 +263,7 @@ export function Selector({
                 {shown.map((option) => (
                     <label key={option.id}>
                         <input
+                            disabled={!!unavailable}
                             type={multiple ? 'checkbox' : 'radio'}
                             name={id}
                             checked={value.includes(option.id)}
@@ -262,7 +292,9 @@ export function Selector({
                         {option.name}
                     </label>
                 ))}
-                {!shown.length && <p className="muted">No matching options.</p>}
+                {!unavailable && !shown.length && (
+                    <p className="muted">No matching options.</p>
+                )}
             </div>
         </fieldset>
     );

@@ -1,5 +1,19 @@
 # Development
 
+Administration Discord requests use process-local 15-second authorization and
+role/channel snapshots with bounded single-flight fetches. Permission revocation
+can take up to that TTL; local bot installation status remains fresh from the DB.
+No permission or metadata cache is persisted. See
+[administration](administration.md#short-lived-discord-snapshots) for cache bounds,
+429 handling and the deliberate authorization trade-off.
+
+When checking Access, Logging and Message Logging, inspect normal tab navigation
+for repeated `/users/@me/guilds` requests. Concurrent requests in one session should
+share a fetch and reuse it within 15 seconds. Metadata failures should leave settings
+visible, with a selector retry and the current draft intact. OAuth 429 uses Discord's
+returned delay, with at most one short GET retry; do not deliberately hammer Discord
+to test limits. Regression tests use controlled clocks, events and mocked responses.
+
 ## Requirements and installation
 
 - Python 3.13 (managed by `uv` if needed).

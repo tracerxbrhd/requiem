@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { StrictMode } from 'react';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
@@ -11,7 +12,7 @@ import { GuildCard } from './pages';
 import { ModulePage } from './settings';
 import { UnsavedGuard } from './ui';
 import { Protected, AuthProvider } from './auth';
-import type { Overview } from './api';
+import { request, setCsrf, type Overview } from './api';
 const overview: Overview = {
     guild: { id: '10', name: 'Test community', icon: null, installed: true },
     general: { revision: 'a'.repeat(64), data: { enabled: false } },
@@ -28,6 +29,8 @@ const fetchMock = vi.fn();
 beforeEach(() => {
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockReset();
+    setCsrf('test-session');
+    setCsrf(null);
     Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
         configurable: true,
         value: function (this: HTMLDialogElement) {
@@ -52,7 +55,7 @@ function respond(value: unknown, status = 200) {
         json: () => Promise.resolve(value),
     });
 }
-function mountModule(section = 'general') {
+function mountModule(section = 'general', strict = false) {
     const router = createMemoryRouter(
         [
             {
@@ -61,6 +64,14 @@ function mountModule(section = 'general') {
                     <Outlet context={{ overview, reload: async () => {} }} />
                 ),
                 children: [
+                    {
+                        path: 'moderation/access',
+                        element: <ModulePage section="access" />,
+                    },
+                    {
+                        path: 'moderation/logging',
+                        element: <ModulePage section="logging" />,
+                    },
                     {
                         path: 'moderation/general',
                         element: <ModulePage section="general" />,
@@ -78,10 +89,177 @@ function mountModule(section = 'general') {
         ],
         { initialEntries: [`/dashboard/guilds/10/moderation/${section}`] },
     );
-    render(<RouterProvider router={router} />);
+    render(
+        strict ? (
+            <StrictMode>
+                <RouterProvider router={router} />
+            </StrictMode>
+        ) : (
+            <RouterProvider router={router} />
+        ),
+    );
     return router;
 }
 describe('administration interactions', () => {
+    it('coalesces development StrictMode settings requests', async () => {
+        fetchMock.mockImplementation(() => respond(overview.general));
+        mountModule('general', true);
+        expect(await screen.findByRole('switch')).toBeVisible();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    it('loads Access without roles, retains configured IDs and retries only metadata', async () => {
+        let available = false;
+        fetchMock.mockImplementation((url: string) =>
+            url.endsWith('/roles')
+                ? available
+                    ? respond([
+                          { id: '100', name: 'Moderator', colour: 0, type: 0 },
+                      ])
+                    : respond(
+                          {
+                              error: {
+                                  code: 'discord_unavailable',
+                                  message: 'Roles unavailable',
+                              },
+                          },
+                          503,
+                      )
+                : respond({
+                      ...overview.access,
+                      data: { roles: ['100'], commands: [] },
+                  }),
+        );
+        mountModule('access');
+        expect(await screen.findByText('Role 100')).toBeVisible();
+        expect(await screen.findByText('Roles unavailable')).toBeVisible();
+        expect(screen.queryByText('Configuration unavailable')).toBeNull();
+        available = true;
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Retry metadata' }),
+        );
+        expect(
+            await screen.findByRole('checkbox', { name: 'Moderator' }),
+        ).toBeChecked();
+        expect(
+            fetchMock.mock.calls.filter(([url]) => url.endsWith('/access')),
+        ).toHaveLength(1);
+    });
+    it('keeps Logging settings and draft through a channel 429 and failed save', async () => {
+        fetchMock.mockImplementation((url: string, init: RequestInit) =>
+            url.endsWith('/channels') || init.method === 'PUT'
+                ? respond(
+                      {
+                          error: {
+                              code: 'discord_rate_limited',
+                              message: 'Limited',
+                              retry_after: 1.8,
+                          },
+                      },
+                      429,
+                  )
+                : respond({
+                      revision: 'a'.repeat(64),
+                      data: {
+                          enabled: false,
+                          default_channel: '200',
+                          categories: [],
+                          events: [],
+                      },
+                  }),
+        );
+        mountModule('logging');
+        await userEvent.click(
+            await screen.findByRole('switch', { name: 'Enable audit logging' }),
+        );
+        expect(await screen.findByText(/Try again in 2 seconds/)).toBeVisible();
+        expect(screen.getByText('Channel 200')).toBeVisible();
+        expect(screen.queryByText('Configuration unavailable')).toBeNull();
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Retry metadata' }),
+        );
+        await waitFor(() =>
+            expect(
+                fetchMock.mock.calls.filter(([url]) =>
+                    url.endsWith('/channels'),
+                ),
+            ).toHaveLength(2),
+        );
+        expect(screen.getByRole('switch')).toHaveAttribute(
+            'aria-checked',
+            'true',
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Save changes' }),
+        );
+        expect(
+            await screen.findByText(
+                /Discord validation could not be completed/,
+            ),
+        ).toBeVisible();
+        expect(screen.getByRole('switch')).toHaveAttribute(
+            'aria-checked',
+            'true',
+        );
+        expect(screen.getByText('You have unsaved changes')).toBeVisible();
+        const put = fetchMock.mock.calls.find(
+            ([, init]) => init.method === 'PUT',
+        );
+        expect(JSON.parse(put![1].body).data.default_channel).toBe('200');
+        expect(
+            screen.getByRole('button', { name: 'Save changes' }),
+        ).toBeEnabled();
+    });
+    it('renders Message Logging and keeps edits when channel metadata fails later', async () => {
+        let failMetadata!: (value: unknown) => void;
+        fetchMock.mockImplementation((url: string) =>
+            url.endsWith('/channels')
+                ? new Promise((_resolve, reject) => {
+                      failMetadata = reject;
+                  })
+                : respond({
+                      revision: 'a'.repeat(64),
+                      data: {
+                          events: [],
+                          include_bots: false,
+                          include_webhooks: false,
+                          scope: 'selected_channels_only',
+                          channels: ['200'],
+                      },
+                  }),
+        );
+        mountModule('message-logging');
+        await userEvent.click(
+            await screen.findByRole('switch', { name: 'Include bots' }),
+        );
+        failMetadata(new Error('offline'));
+        expect(
+            await screen.findByRole('button', { name: 'Retry metadata' }),
+        ).toBeVisible();
+        expect(
+            screen.getByRole('switch', { name: 'Include bots' }),
+        ).toHaveAttribute('aria-checked', 'true');
+        expect(screen.getByText('Channel 200')).toBeVisible();
+        expect(screen.queryByText('Configuration unavailable')).toBeNull();
+    });
+    it('removes failed shared GET requests so the next request can retry', async () => {
+        fetchMock.mockImplementation(() =>
+            respond(
+                { error: { code: 'discord_rate_limited', message: 'Limited' } },
+                429,
+            ),
+        );
+        const results = await Promise.allSettled([
+            request('/guilds/10/roles'),
+            request('/guilds/10/roles'),
+        ]);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(results.every((result) => result.status === 'rejected')).toBe(
+            true,
+        );
+        fetchMock.mockImplementation(() => respond([]));
+        await expect(request('/guilds/10/roles')).resolves.toEqual([]);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
     it('redirects an unauthenticated protected route', async () => {
         fetchMock.mockImplementation(() =>
             respond({

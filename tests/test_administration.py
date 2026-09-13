@@ -2,6 +2,7 @@ import asyncio
 import copy
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -13,10 +14,12 @@ from requiem.application.admin.auth import (
     INSTALL_PERMISSIONS,
     AuthenticationService,
     DiscordOAuth,
+    Principal,
     digest,
 )
 from requiem.application.admin.configuration import AdministrationConfiguration
-from requiem.application.admin.guilds import AdministrationGuilds, Entity
+from requiem.application.admin.errors import AdminError
+from requiem.application.admin.guilds import AdministrationGuilds, AuthorizedGuild, Entity
 from requiem.bootstrap import Runtime
 from requiem.domain.configuration import AccessMode
 from requiem.modules.moderation.audit.delivery import LoggingDiagnosticsService
@@ -81,15 +84,17 @@ async def admin(runtime: Runtime, database_url: str) -> AsyncIterator[Administra
         auth = AuthenticationService(
             runtime.database.sessions, settings, DiscordOAuth(settings, client)
         )
+        guilds = AdministrationGuilds(runtime.database.sessions, auth, Metadata())
         yield Administration(
             settings,
             auth,
-            AdministrationGuilds(runtime.database.sessions, auth, Metadata()),
+            guilds,
             AdministrationConfiguration(runtime.database.sessions, runtime.logging_configuration),
             LoggingDiagnosticsService(
                 runtime.logging_configuration, UnavailableDelivery(), Capabilities()
             ),
         )
+        await guilds.snapshots.close()
 
 
 @pytest.fixture
@@ -108,6 +113,128 @@ async def login(client: httpx.AsyncClient) -> None:
     assert (await client.post("/api/auth/dev")).status_code == 200
     session = (await client.get("/api/auth/session")).json()
     client.headers["X-CSRF-Token"] = session["csrf"]
+
+
+@pytest.mark.integration
+async def test_authorization_ttl_installation_freshness_and_logout(
+    admin: Administration, runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opaque = await admin.auth.create("discord", "42", "Admin")
+    principal = await admin.auth.principal(opaque)
+    monkeypatch.setattr(admin.auth, "access_token", AsyncMock(return_value="secret"))
+    upstream = AsyncMock(return_value=[{"id": "10", "name": "Owner", "owner": True}])
+    monkeypatch.setattr(admin.auth.oauth, "get", upstream)
+    now = 0.0
+    admin.guilds.snapshots.clock = lambda: now
+    await runtime.guilds.set_installed(10, False)
+    assert not (await admin.guilds.list(principal))[0].installed
+    await runtime.guilds.set_installed(10, True)
+    assert (await admin.guilds.authorize(principal, 10)).installed
+    await runtime.guilds.set_installed(10, False)
+    assert not (await admin.guilds.list(principal))[0].installed
+    assert upstream.await_count == 1
+    now = 15
+    await admin.guilds.list(principal)
+    assert upstream.await_count == 2
+    await admin.auth.logout(opaque)
+    assert not admin.guilds.snapshots.entries
+    with pytest.raises(AdminError) as error:
+        await admin.auth.principal(opaque)
+    assert error.value.status == 401
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("fails", [False, True])
+async def test_ten_authorizations_share_fetch_and_failed_work_is_retryable(
+    admin: Administration, runtime: Runtime, monkeypatch: pytest.MonkeyPatch, fails: bool
+) -> None:
+    await runtime.guilds.set_installed(10, True)
+    principal = await admin.auth.principal(await admin.auth.create("discord", "42", "Admin"))
+    monkeypatch.setattr(admin.auth, "access_token", AsyncMock(return_value="secret"))
+    arrived = 0
+    ready = asyncio.Event()
+    original = admin.guilds.snapshot
+
+    async def snapshot(value: Principal) -> tuple[AuthorizedGuild, ...]:
+        nonlocal arrived
+        arrived += 1
+        if arrived == 10:
+            ready.set()
+        return await original(value)
+
+    monkeypatch.setattr(admin.guilds, "snapshot", snapshot)
+    failure = AdminError("discord_unavailable", "Unavailable", 503)
+
+    async def fetch(path: str, token: str) -> list[dict[str, object]]:
+        await ready.wait()
+        if fails:
+            raise failure
+        return [{"id": "10", "name": "Owner", "owner": True}]
+
+    upstream = AsyncMock(side_effect=fetch)
+    monkeypatch.setattr(admin.auth.oauth, "get", upstream)
+    results = await asyncio.gather(
+        *(admin.guilds.authorize(principal, 10) for _ in range(10)), return_exceptions=True
+    )
+    assert upstream.await_count == 1
+    assert not admin.guilds.snapshots.inflight
+    if fails:
+        assert all(result is failure for result in results)
+        assert not admin.guilds.snapshots.entries
+        fails = False
+        assert (await admin.guilds.authorize(principal, 10)).name == "Owner"
+        assert upstream.await_count == 2
+    else:
+        assert all(
+            not isinstance(result, BaseException) and result.name == "Owner" for result in results
+        )
+
+
+@pytest.mark.integration
+async def test_authorization_sessions_are_isolated(
+    admin: Administration, runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a = await admin.auth.principal(await admin.auth.create("discord", "42", "Admin A"))
+    b = await admin.auth.principal(await admin.auth.create("discord", "42", "Admin B"))
+    monkeypatch.setattr(admin.auth, "access_token", AsyncMock(side_effect=["a", "b"]))
+    upstream = AsyncMock(
+        side_effect=[
+            [{"id": "10", "name": "Owner", "owner": True}],
+            [{"id": "11", "name": "Admin", "permissions": "8"}],
+        ]
+    )
+    monkeypatch.setattr(admin.auth.oauth, "get", upstream)
+    first, second = await asyncio.gather(admin.guilds.list(a), admin.guilds.list(b))
+    assert {first[0].id, second[0].id} == {"10", "11"}
+    assert first == await admin.guilds.list(a)
+    assert second == await admin.guilds.list(b)
+    assert upstream.await_count == 2
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("section", ["access", "logging", "message-logging"])
+async def test_metadata_error_envelope_does_not_mutate_settings(
+    client: httpx.AsyncClient,
+    admin: Administration,
+    runtime: Runtime,
+    monkeypatch: pytest.MonkeyPatch,
+    section: str,
+) -> None:
+    await runtime.guilds.set_installed(10, True)
+    await login(client)
+    path = f"/api/guilds/10/modules/moderation/{section}"
+    snapshot = (await client.get(path)).json()
+    monkeypatch.setattr(
+        admin.guilds.metadata,
+        "roles" if section == "access" else "channels",
+        AsyncMock(side_effect=AdminError("discord_rate_limited", "Limited", 429, retry_after=1.8)),
+    )
+    result = await client.put(path, json=snapshot)
+    assert result.status_code == 429
+    assert result.json() == {
+        "error": {"code": "discord_rate_limited", "message": "Limited", "retry_after": 1.8}
+    }
+    assert (await client.get(path)).json() == snapshot
 
 
 def test_development_startup_guard(settings: Settings) -> None:

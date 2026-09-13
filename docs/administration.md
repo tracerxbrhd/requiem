@@ -123,10 +123,63 @@ guild and bot token. Never seed a production database.
 
 ## Authorization and installation lifecycle
 
-Every guild-specific API request checks the principal against fresh user OAuth guild
-data. Only an owner or a user with Discord Administrator is admitted. Manage Guild
+Every guild-specific API request validates the session and checks a short-lived
+snapshot of user OAuth guild data. Only an owner or a user with Discord Administrator is admitted. Manage Guild
 alone is insufficient. Frontend guards are only UX. Development principals use the
 same authorization interface with an explicitly gated local guild source.
+
+### Short-lived Discord snapshots
+
+Each API process caches normalized authorized guild IDs, names and icons for **15
+seconds**, keyed by the administration session digest. Owner/Admin permission
+revocation can therefore take up to approximately 15 seconds to affect an existing
+dashboard session; this bounded staleness is accepted for v1. Session expiry and
+CSRF are still checked per request. Logout invalidates the snapshot, including
+preventing an already running fetch from repopulating it.
+
+The snapshot contains no local installation status. Every list/authorization merges
+it with current `GuildRecord` values, so installation and removal do not wait for
+OAuth cache expiry. Development authentication does not request OAuth guild lists.
+
+Concurrent misses for the same session share one task. A cancelled HTTP waiter
+does not cancel other waiters' work; failed tasks are removed and may be retried.
+Roles and channels each use a separate guild-keyed cache with the same 15-second
+TTL and coalescing. Hikari still handles bot REST rate limits.
+
+Each cache holds at most 256 completed entries (expired entries are pruned on access;
+least recently used entries are evicted at capacity) and 64 in-flight fetches.
+Additional distinct misses at capacity return `administration_busy`/503 rather
+than growing a queue. Shutdown cancels and drains outstanding tasks before closing
+HTTP clients. Caches are process-local: replicas have independent snapshots. Nothing
+is persisted to PostgreSQL; no migration, Redis or background cache worker is needed.
+
+### Rate limits and partial loading
+
+OAuth HTTP 429 returns `discord_rate_limited` with HTTP 429 and an optional numeric
+`error.retry_after` in seconds. A valid `Retry-After` takes precedence over JSON
+`retry_after`; missing, malformed, negative, non-finite or implausibly large delays
+are treated as unknown. This input sanity check does not define a Discord bucket.
+Safe OAuth GETs wait once and retry once only for a known delay of at most two
+seconds. Longer or unknown waits, and a second 429, are returned immediately.
+Token exchange/refresh is never automatically retried. Session expiry/401,
+forbidden access/403, rate limiting/429, invalid GET JSON or guild data/502, and
+network/upstream failure/503 have distinct codes.
+
+Settings and selector metadata load independently. Access, Logging and Message
+Logging retain their configuration when roles/channels fail; affected selectors
+show a local retry control and retain configured IDs. Known rate-limit timing is
+shown in the message, without a frontend retry loop. Metadata retries never reload
+settings or overwrite a draft. Saves still require server-side metadata validation;
+an upstream validation failure leaves the draft intact for another save attempt.
+Overlapping frontend GETs are deduplicated, including StrictMode effects; completed
+responses are not cached in the browser and session changes clear pending lookup keys.
+
+Cache events use DEBUG logs with `resource` and `cache_event`. OAuth 429 warnings
+include only endpoint family, validated delay and safe rate-limit scope, never
+session identifiers or credentials.
+
+Official references: [Discord rate limits](https://docs.discord.com/developers/topics/rate-limits)
+and [Get Current User Guilds](https://docs.discord.com/developers/resources/user#get-current-user-guilds).
 
 Removing the bot marks the installation inactive and preserves all configuration.
 The selector combines authorized installed and non-installed servers, installed first,

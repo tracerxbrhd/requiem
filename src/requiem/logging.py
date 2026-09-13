@@ -26,12 +26,22 @@ class RedactingFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         if not self.json_output:
             return self.redact(super().format(record))
-        payload = {
+        payload: dict[str, object] = {
             "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": self.redact(record.getMessage()),
         }
+        for field in (
+            "resource",
+            "cache_event",
+            "endpoint_family",
+            "retry_after",
+            "rate_limit_scope",
+        ):
+            if field in record.__dict__:
+                value = record.__dict__[field]
+                payload[field] = self.redact(value) if isinstance(value, str) else value
         if record.exc_info:
             payload["exception"] = self.redact(self.formatException(record.exc_info))
         return json.dumps(payload, ensure_ascii=False)

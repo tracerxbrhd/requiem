@@ -60,15 +60,43 @@ export class ApiError extends Error {
         public code: string,
         message: string,
         public status: number,
+        public retryAfter?: number,
     ) {
-        super(message);
+        super(
+            code === 'discord_rate_limited'
+                ? 'Discord is temporarily rate limiting dashboard requests.' +
+                      (retryAfter === undefined
+                          ? ' Please retry shortly.'
+                          : ` Try again in ${Math.ceil(retryAfter)} seconds.`)
+                : message,
+        );
     }
 }
 let csrf: string | null = null;
+const pending = new Map<string, Promise<unknown>>();
 export function setCsrf(value: string | null) {
+    if (value !== csrf) pending.clear();
     csrf = value;
 }
-export async function request<T>(
+export function request<T>(
+    path: string,
+    method = 'GET',
+    data?: unknown,
+): Promise<T> {
+    if (method !== 'GET') {
+        pending.clear();
+        return performRequest<T>(path, method, data);
+    }
+    const existing = pending.get(path);
+    if (existing) return existing as Promise<T>;
+    const work = performRequest<T>(path, method, data).finally(() => {
+        if (pending.get(path) === work) pending.delete(path);
+    });
+    // Coalesce overlapping effects (including development StrictMode); retain no completed data.
+    if (pending.size < 64) pending.set(path, work);
+    return work;
+}
+async function performRequest<T>(
     path: string,
     method = 'GET',
     data?: unknown,
@@ -90,13 +118,22 @@ export async function request<T>(
     });
     const body = await response.json().catch(() => null);
     if (!response.ok) {
-        if (response.status === 401)
+        if (response.status === 401) {
+            pending.clear();
             window.dispatchEvent(new Event('requiem:unauthorized'));
+        }
+        const delay = body?.error?.retry_after;
         throw new ApiError(
             body?.error?.code ?? 'unavailable',
             body?.error?.message ??
                 'The server is unavailable. Please try again.',
             response.status,
+            typeof delay === 'number' &&
+                Number.isFinite(delay) &&
+                delay >= 0 &&
+                delay <= 86400
+                ? delay
+                : undefined,
         );
     }
     return body as T;

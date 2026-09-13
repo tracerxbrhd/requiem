@@ -13,6 +13,7 @@ import {
     type Snapshot,
 } from './api';
 import { humanize, locale } from './locale';
+import { SelectorMetadata, useMetadata } from './metadata';
 import { Callout, Dialog, Selector, State, Toggle, UnsavedGuard } from './ui';
 export type WorkspaceContext = {
     overview: Overview;
@@ -80,7 +81,14 @@ function Editor({
         Sections[Section]
     > | null>(null);
     const [draft, setDraft] = useState<Sections[Section] | null>(null);
-    const [entities, setEntities] = useState<Entity[]>([]);
+    const metadata = useMetadata(
+        section === 'access'
+            ? `/guilds/${guild}/roles`
+            : section === 'logging' || section === 'message-logging'
+              ? `/guilds/${guild}/channels`
+              : null,
+    );
+    const entities = metadata.entities;
     const [error, setError] = useState('');
     const [conflict, setConflict] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -91,19 +99,11 @@ function Editor({
         setConflict(false);
         setSuccess(false);
         try {
-            const [value, options] = await Promise.all([
-                request<Snapshot<Sections[Section]>>(
-                    sectionPath(guild, section),
-                ),
-                section === 'access'
-                    ? request<Entity[]>(`/guilds/${guild}/roles`)
-                    : section === 'logging' || section === 'message-logging'
-                      ? request<Entity[]>(`/guilds/${guild}/channels`)
-                      : Promise.resolve([]),
-            ]);
+            const value = await request<Snapshot<Sections[Section]>>(
+                sectionPath(guild, section),
+            );
             setSnapshot(value);
             setDraft(value.data);
-            setEntities(options);
         } catch (e) {
             setError((e as Error).message);
         }
@@ -129,7 +129,11 @@ function Editor({
             setSuccess(true);
             await reload();
         } catch (e) {
-            setError((e as Error).message);
+            setError(
+                e instanceof ApiError && e.code.startsWith('discord_')
+                    ? `Changes were not saved because Discord validation could not be completed. ${(e as Error).message}`
+                    : (e as Error).message,
+            );
             setConflict(e instanceof ApiError && e.status === 409);
         } finally {
             setBusy(false);
@@ -504,7 +508,14 @@ function Editor({
             <UnsavedGuard dirty={dirty} />
             <section className="settings-panel glass">
                 <fieldset disabled={busy} className="form-fields">
-                    {form}
+                    <SelectorMetadata.Provider
+                        value={{
+                            ...metadata,
+                            kind: section === 'access' ? 'Role' : 'Channel',
+                        }}
+                    >
+                        {form}
+                    </SelectorMetadata.Provider>
                 </fieldset>
             </section>
             {error && (
