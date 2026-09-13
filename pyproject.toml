@@ -12,9 +12,11 @@ license-files = ["LICENSE"]
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "alembic>=1.16,<2",
+    "cryptography>=46,<49",
     "fastapi>=0.115,<1",
     "hikari>=2.6,<2.7",
     "hikari-arc>=2.3,<2.4",
+    "httpx>=0.28,<1",
     "psycopg[binary]>=3.2,<4",
     "pydantic-settings>=2.9,<3",
     "sqlalchemy[asyncio]>=2.0.40,<2.1",

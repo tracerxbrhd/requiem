@@ -23,7 +23,8 @@ tests/                    Domain, transport and PostgreSQL integration tests
 
 Transport handlers call small application services. They neither issue SQL nor contain
 permission rules. Services return immutable domain values, not ORM records. Each operation
-opens its own session; mutations use a transaction. Repositories are concrete and scoped to
+opens its own session; mutations use a transaction. Administration can explicitly bind the
+configuration services to one outer transaction for an atomic section save. Repositories are concrete and scoped to
 that transaction. There is no global session, mutable configuration cache, event bus or
 dynamic plugin loader. Arc receives process-owned services through dependency injection.
 
@@ -136,7 +137,7 @@ services. Neither application migrates on startup. API readiness uses Python's s
 library; PostgreSQL readiness uses `pg_isready`. No fake bot healthcheck is provided.
 
 The disabled-by-default policy, empty-role denial, lack of owner/admin Requiem bypass,
-and installation-state semantics remain unchanged. Configuration has application services
-but no user-facing management UI or API yet. Authentication, general schedules and frontend
-work remain outside this milestone. Logging switches are independent of command switches;
+and installation-state semantics remain unchanged. Stage 4 exposes configuration through authenticated FastAPI resources and a React/Vite
+workspace. See [Administration](administration.md) for server sessions, Owner/Admin authorization,
+section revisions and atomic resets. General schedules remain outside this milestone. Logging switches are independent of command switches;
 configuration changes themselves are not audited.

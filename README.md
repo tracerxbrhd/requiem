@@ -7,7 +7,9 @@ capabilities, while keeping Discord's authority intact.
 The shared core provides server configuration, role-based command access, persistence,
 and independent Discord bot and HTTP API processes. Moderation provides seven commands,
 restart-safe temporary bans, independent audit logging and optional message logging.
+The web administration platform adds Discord sign-in and a focused configuration workspace.
 
+- [Administration, OAuth and frontend setup](docs/administration.md)
 - [Development and Docker setup](docs/development.md)
 - [Architecture and configuration rules](docs/architecture.md)
 - [Moderation commands and lifecycle](docs/moderation.md)

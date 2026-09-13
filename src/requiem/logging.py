@@ -45,7 +45,16 @@ def configure_logging(settings: Settings) -> None:
     handler.setFormatter(
         RedactingFormatter(
             json_output=settings.log_format == "json",
-            secrets=(database_url, password, unquote(password), token),
+            secrets=(
+                database_url,
+                password,
+                unquote(password),
+                token,
+                settings.discord_client_secret.get_secret_value()
+                if settings.discord_client_secret
+                else "",
+                settings.session_secret.get_secret_value() if settings.session_secret else "",
+            ),
         )
     )
     logging.basicConfig(level=settings.log_level, handlers=[handler], force=True)

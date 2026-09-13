@@ -40,6 +40,15 @@ services:
       REQUIEM_DATABASE_URL: postgresql+psycopg://requiem:requiem@postgres:5432/requiem
       REQUIEM_API_HOST: 0.0.0.0
       REQUIEM_API_PORT: 8000
+      REQUIEM_DISCORD_TOKEN: ${REQUIEM_DISCORD_TOKEN:-}
+      REQUIEM_DISCORD_CLIENT_ID: ${REQUIEM_DISCORD_CLIENT_ID:-}
+      REQUIEM_DISCORD_CLIENT_SECRET: ${REQUIEM_DISCORD_CLIENT_SECRET:-}
+      REQUIEM_DISCORD_OAUTH_REDIRECT_URI: ${REQUIEM_DISCORD_OAUTH_REDIRECT_URI:-http://localhost:5173/api/auth/discord/callback}
+      REQUIEM_FRONTEND_URL: ${REQUIEM_FRONTEND_URL:-http://localhost:5173}
+      REQUIEM_SESSION_SECRET: ${REQUIEM_SESSION_SECRET:-}
+      REQUIEM_DEV_AUTH_ENABLED: ${REQUIEM_DEV_AUTH_ENABLED:-false}
+      REQUIEM_MESSAGE_CONTENT_INTENT_ENABLED: ${REQUIEM_MESSAGE_CONTENT_INTENT_ENABLED:-false}
+      REQUIEM_GUILD_MEMBERS_INTENT_ENABLED: ${REQUIEM_GUILD_MEMBERS_INTENT_ENABLED:-false}
       REQUIEM_ENVIRONMENT: ${REQUIEM_ENVIRONMENT:-development}
       REQUIEM_LOG_LEVEL: ${REQUIEM_LOG_LEVEL:-INFO}
       REQUIEM_LOG_FORMAT: ${REQUIEM_LOG_FORMAT:-json}
@@ -80,6 +89,14 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:${REQUIEM_FRONTEND_PORT:-5173}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   postgres-data:

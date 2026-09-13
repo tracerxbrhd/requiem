@@ -11,8 +11,8 @@ Native audit-log reasons on administrative requests remain supported.
 The immutable value contains the full logging configuration. Save validates identifiers,
 scope and positive Discord IDs before writing, then atomically replaces the guild's
 configuration. Callers should edit a recently read snapshot; concurrent whole-configuration
-saves are last-writer-wins. No Discord settings commands or administration HTTP endpoints
-are added. This is the application contract for the future administration interface.
+saves are last-writer-wins. Stage 4 adds version-checked administration HTTP sections using this same contract;
+see [Administration](administration.md). Direct full-value service saves remain last-writer-wins.
 
 Migration `0003_logging` follows the unchanged `0001_core` and `0002_temporary_bans`:
 

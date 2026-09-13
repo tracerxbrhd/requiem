@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     MetaData,
     String,
+    Text,
     func,
     text,
 )
@@ -27,6 +28,25 @@ class Base(DeclarativeBase):
             "pk": "pk_%(table_name)s",
         }
     )
+
+
+class AdminSessionRecord(Base):
+    __tablename__ = "admin_sessions"
+    session_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(16))
+    subject: Mapped[str] = mapped_column(String(64))
+    display_name: Mapped[str] = mapped_column(String(128))
+    avatar: Mapped[str | None] = mapped_column(String(256))
+    csrf: Mapped[str] = mapped_column(String(64))
+    token_ciphertext: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class OAuthStateRecord(Base):
+    __tablename__ = "admin_oauth_states"
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    browser_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class GuildRecord(Base):

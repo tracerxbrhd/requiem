@@ -207,3 +207,9 @@ configuration contract, permissions and delivery limitations.
 The GitHub Actions workflow performs locked dependency installation, lint, format, strict
 type checking, the complete test suite with a PostgreSQL service, and Compose validation.
 It requires no Discord credentials and contains no deployment or release automation.
+
+## Administration frontend
+
+Stage 4 adds the `frontend` Compose service and a direct Vite development workflow.
+See [Administration](administration.md) for OAuth setup, the required session secret,
+local dev authentication, explicit seed command and frontend quality checks.

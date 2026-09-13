@@ -21,3 +21,5 @@ Thumbs.db
 *.log
 *.tmp
 postgres-data/
+node_modules/
+*.tsbuildinfo

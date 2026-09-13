@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from requiem.settings import Settings
 
-SCHEMA_REVISION = "0003_logging"
+SCHEMA_REVISION = "0004_admin_platform"
 
 
 class Database:
